@@ -3,57 +3,37 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Jarvis AR Physics Engine</title>
+    <title>Intelligent JARVIS AR Engine</title>
     <style>
-        body, html {
-            margin: 0; padding: 0; overflow: hidden;
-            background-color: #050510; /* Darker sci-fi background */
-            font-family: 'Courier New', Courier, monospace; /* HUD Font */
-        }
-
+        body, html { margin: 0; padding: 0; overflow: hidden; background-color: #050510; font-family: 'Courier New', Courier, monospace; }
         .mirrored { transform: scaleX(-1); }
-
+        
         #camera-feed {
-            position: absolute; top: 0; left: 0;
-            width: 100vw; height: 100vh;
-            object-fit: cover; z-index: 0;
-            opacity: 0.6; /* Dim the camera for hologram effect */
-            filter: grayscale(30%) contrast(120%);
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            object-fit: cover; z-index: 0; opacity: 0.6; filter: grayscale(30%) contrast(120%);
         }
-
-        #physics-canvas {
-            position: absolute; top: 0; left: 0;
-            width: 100vw; height: 100vh; z-index: 1;
-            pointer-events: none;
-        }
-
+        
+        #physics-canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; pointer-events: none; }
+        
         #ui-overlay {
             position: absolute; top: 20px; left: 20px; z-index: 2;
-            background: rgba(0, 20, 40, 0.8);
-            border: 1px solid #00f3ff;
-            box-shadow: 0 0 10px #00f3ff;
-            color: #00f3ff;
-            padding: 20px;
-            border-radius: 5px;
-            text-transform: uppercase;
+            background: rgba(0, 20, 40, 0.8); border: 1px solid #00f3ff;
+            box-shadow: 0 0 10px #00f3ff; color: #00f3ff; padding: 20px;
+            border-radius: 5px; text-transform: uppercase;
         }
-
+        
         h3 { margin-top: 0; border-bottom: 1px solid #00f3ff; padding-bottom: 10px; }
         .instruction { font-size: 13px; margin: 8px 0; }
         .color-indicator { 
             display: inline-block; width: 15px; height: 15px; 
-            border-radius: 50%; vertical-align: middle;
-            box-shadow: 0 0 8px currentColor;
+            border-radius: 50%; vertical-align: middle; box-shadow: 0 0 8px currentColor;
         }
     </style>
 
-    <!-- MediaPipe Hands -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-
-    <!-- Matter.js Physics -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
 </head>
 <body>
@@ -62,193 +42,255 @@
     <canvas id="physics-canvas" class="mirrored"></canvas>
 
     <div id="ui-overlay">
-        <h3>J.A.R.V.I.S. AR Interface</h3>
-        <div class="instruction">☝️ <b>Index Up:</b> Construct Object (Static)</div>
-        <div class="instruction">🖐️ <b>Open Hand:</b> Drop & Interact (Physics)</div>
-        <div class="instruction">✊ <b>Fist:</b> Purge Canvas (Erase)</div>
-        <div class="instruction">🤏 <b>Pinch:</b> Cycle Material Color</div>
+        <h3>J.A.R.V.I.S. AI Engine</h3>
+        <div class="instruction">☝️ <b>Index:</b> Draw (Auto-Rectifies)</div>
+        <div class="instruction">✌️ <b>Index + Middle:</b> Tap to Fill Color</div>
+        <div class="instruction">🖐️ <b>Open Hand:</b> Drop & Interact</div>
+        <div class="instruction">🤙 <b>Pinky Up:</b> Undo Last Object</div>
+        <div class="instruction">✊ <b>Fist:</b> Purge All</div>
+        <div class="instruction">🤏 <b>Pinch:</b> Next Color</div>
         <hr style="border-color: #00f3ff44;">
         <div class="instruction">Material: <span id="color-box" class="color-indicator" style="background-color: #ff3b30;"></span></div>
-        <div class="instruction">System: <span id="status-text" style="color: #fff;">Calibrating Optics...</span></div>
+        <div class="instruction">System: <span id="status-text" style="color: #fff;">Calibrating...</span></div>
     </div>
 
     <script>
-        // --- 1. Setup Matter.js Physics ---
-        const Engine = Matter.Engine,
-              Render = Matter.Render,
-              Runner = Matter.Runner,
-              Bodies = Matter.Bodies,
-              Composite = Matter.Composite,
-              Body = Matter.Body;
+        // --- 1. Physics Setup ---
+        const Engine = Matter.Engine, Render = Matter.Render, Runner = Matter.Runner,
+              Bodies = Matter.Bodies, Composite = Matter.Composite, Body = Matter.Body,
+              Constraint = Matter.Constraint, Query = Matter.Query;
 
         const engine = Engine.create();
-        const world = engine.world;
-        engine.gravity.y = 0; // Starts floating
-
-        const canvas = document.getElementById('physics-canvas');
+        engine.gravity.y = 0; // Starts in zero-gravity
+        
         const render = Render.create({
-            canvas: canvas,
+            canvas: document.getElementById('physics-canvas'),
             engine: engine,
-            options: {
-                width: window.innerWidth,
-                height: window.innerHeight,
-                wireframes: false,
-                background: 'transparent'
-            }
+            options: { width: window.innerWidth, height: window.innerHeight, wireframes: false, background: 'transparent' }
         });
 
-        // The Floor
         const floor = Bodies.rectangle(window.innerWidth / 2, window.innerHeight + 50, window.innerWidth, 100, { isStatic: true });
-        Composite.add(world, floor);
+        Composite.add(engine.world, floor);
 
-        // JARVIS HAND COLLIDERS (5 fingertips + 1 palm)
+        // Jarvis Hand Colliders
         const handColliders = [];
-        const holoColor = 'rgba(0, 243, 255, 0.4)'; // Cyan holographic color
-        
         for (let i = 0; i < 6; i++) {
-            // Palm is index 5 (make it larger), fingers are 0-4
-            const size = (i === 5) ? 45 : 20; 
-            const collider = Bodies.circle(-1000, -1000, size, { 
-                isStatic: true, // They act as solid walls to the ink
-                render: { fillStyle: holoColor, strokeStyle: '#00f3ff', lineWidth: 2 }
+            const collider = Bodies.circle(-1000, -1000, i === 5 ? 45 : 20, { 
+                isStatic: true, render: { fillStyle: 'rgba(0, 243, 255, 0.4)', strokeStyle: '#00f3ff', lineWidth: 2 }
             });
             handColliders.push(collider);
-            Composite.add(world, collider);
+            Composite.add(engine.world, collider);
         }
 
         Render.run(render);
         Runner.run(Runner.create(), engine);
 
-        window.addEventListener('resize', () => {
-            render.canvas.width = window.innerWidth;
-            render.canvas.height = window.innerHeight;
-            Body.setPosition(floor, { x: window.innerWidth / 2, y: window.innerHeight + 50 });
-        });
-
-        // --- 2. App State Variables ---
-        let inkParticles = [];
+        // --- 2. State & AI Variables ---
+        let history = []; // For Undo
+        let currentStroke = []; // The live path being drawn
+        let isDrawingMode = false;
+        
         const colors = ['#ff3b30', '#34c759', '#007aff', '#ffcc00', '#af52de', '#ffffff'];
         let colorIndex = 0;
-        let lastPinchTime = 0;
+        let lastActionTime = 0;
+        
         const statusText = document.getElementById('status-text');
         const colorBox = document.getElementById('color-box');
+        const ctx = render.context; // For drawing the live stroke
 
-        // --- 3. Setup MediaPipe Hands ---
-        const videoElement = document.getElementById('camera-feed');
-        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        // --- 3. Shape Recognition AI ---
+        function analyzeAndCreateShape() {
+            if (currentStroke.length < 5) return; // Too small
 
-        hands.setOptions({
-            maxNumHands: 1,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.7,
-            minTrackingConfidence: 0.7
+            // Calculate Bounding Box
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            currentStroke.forEach(p => {
+                if(p.x < minX) minX = p.x; if(p.x > maxX) maxX = p.x;
+                if(p.y < minY) minY = p.y; if(p.y > maxY) maxY = p.y;
+            });
+            
+            const width = maxX - minX;
+            const height = maxY - minY;
+            const centerX = minX + width / 2;
+            const centerY = minY + height / 2;
+            
+            const startP = currentStroke[0];
+            const endP = currentStroke[currentStroke.length - 1];
+            const isClosed = Math.hypot(startP.x - endP.x, startP.y - endP.y) < (width + height) * 0.25;
+
+            let newObject = null;
+            const opts = { isStatic: engine.gravity.y === 0, restitution: 0.8, render: { fillStyle: colors[colorIndex] } };
+
+            if (isClosed) {
+                const aspect = width / height;
+                if (aspect > 0.8 && aspect < 1.2) {
+                    // It's a Circle!
+                    const radius = (width + height) / 4;
+                    newObject = Bodies.circle(centerX, centerY, radius, opts);
+                    statusText.innerText = "Perfect Circle Constructed";
+                } else {
+                    // It's a Rectangle!
+                    newObject = Bodies.rectangle(centerX, centerY, width, height, opts);
+                    statusText.innerText = "Perfect Box Constructed";
+                }
+                Composite.add(engine.world, newObject);
+                history.push([newObject]);
+            } else {
+                // Check if straight line
+                const aspect = width / height;
+                if (aspect > 3 || aspect < 0.3) {
+                    // It's a Line!
+                    const length = Math.hypot(width, height);
+                    const angle = Math.atan2(endP.y - startP.y, endP.x - startP.x);
+                    newObject = Bodies.rectangle(centerX, centerY, length, 15, opts);
+                    Body.setAngle(newObject, angle);
+                    Composite.add(engine.world, newObject);
+                    history.push([newObject]);
+                    statusText.innerText = "Beam Constructed";
+                } else {
+                    // It's a freeform word or squiggle. Create a physical "Chain".
+                    let chainParts = [];
+                    let chainConstraints = [];
+                    const step = 10; // Connect every 10th point to optimize physics
+                    
+                    for(let i=0; i < currentStroke.length; i+=step) {
+                        let pt = currentStroke[i];
+                        let part = Bodies.circle(pt.x, pt.y, 8, opts);
+                        chainParts.push(part);
+                        Composite.add(engine.world, part);
+                        
+                        if (i > 0) {
+                            let prevPart = chainParts[chainParts.length - 2];
+                            let link = Constraint.create({
+                                bodyA: prevPart, bodyB: part, length: step, stiffness: 0.8,
+                                render: { visible: false }
+                            });
+                            chainConstraints.push(link);
+                            Composite.add(engine.world, link);
+                        }
+                    }
+                    history.push([...chainParts, ...chainConstraints]); // Group for undo
+                    statusText.innerText = "Freeform Object Constructed";
+                }
+            }
+        }
+
+        // --- Custom Render Loop for Live Drawing ---
+        Matter.Events.on(render, 'afterRender', function() {
+            if (currentStroke.length > 1) {
+                ctx.beginPath();
+                ctx.moveTo(currentStroke[0].x, currentStroke[0].y);
+                for (let i = 1; i < currentStroke.length; i++) {
+                    ctx.lineTo(currentStroke[i].x, currentStroke[i].y);
+                }
+                ctx.strokeStyle = colors[colorIndex];
+                ctx.lineWidth = 10;
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = colors[colorIndex];
+                ctx.stroke();
+                ctx.shadowBlur = 0; // Reset
+            }
         });
 
-        function isFingerUp(landmarks, tipIndex, pipIndex) {
-            return landmarks[tipIndex].y < landmarks[pipIndex].y;
-        }
+        // --- 4. Hand Tracking Logic ---
+        const videoElement = document.getElementById('camera-feed');
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
-        function getDistance(p1, p2) {
-            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
-        }
+        function isUp(lm, tip, pip) { return lm[tip].y < lm[pip].y; }
 
         hands.onResults((results) => {
             if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-                // Hide holographic colliders if hand is off screen
                 handColliders.forEach(c => Body.setPosition(c, { x: -1000, y: -1000 }));
                 return;
             }
 
-            const landmarks = results.multiHandLandmarks[0];
+            const lm = results.multiHandLandmarks[0];
+            const iUp = isUp(lm, 8, 6), mUp = isUp(lm, 12, 10), rUp = isUp(lm, 16, 14), pUp = isUp(lm, 20, 18);
+            const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
 
-            // Determine finger states
-            const indexUp = isFingerUp(landmarks, 8, 6);
-            const middleUp = isFingerUp(landmarks, 12, 10);
-            const ringUp = isFingerUp(landmarks, 16, 14);
-            const pinkyUp = isFingerUp(landmarks, 20, 18);
-            const pinchDist = getDistance(landmarks[4], landmarks[8]);
-
-            // Gestures
-            const isPinch = pinchDist < 0.05;
-            const isFist = !indexUp && !middleUp && !ringUp && !pinkyUp;
-            const isOpenHand = indexUp && middleUp && ringUp && pinkyUp;
-            const isDrawing = indexUp && !middleUp && !ringUp && !pinkyUp;
-
+            const mapX = (x) => x * window.innerWidth;
+            const mapY = (y) => y * window.innerHeight;
             const now = Date.now();
 
-            // Screen mapping (mirrored handled by CSS)
-            const mapX = (normX) => normX * window.innerWidth;
-            const mapY = (normY) => normY * window.innerHeight;
+            const isPinch = pinchDist < 0.05 && !mUp;
+            const isFist = !iUp && !mUp && !rUp && !pUp;
+            const isOpenHand = iUp && mUp && rUp && pUp;
+            const isDraw = iUp && !mUp && !rUp && !pUp;
+            const isFill = iUp && mUp && !rUp && !pUp;
+            const isUndo = pUp && !iUp && !mUp && !rUp;
 
-            // ACTION 1: PINCH (Change Color)
-            if (isPinch && now - lastPinchTime > 500) {
-                colorIndex = (colorIndex + 1) % colors.length;
-                colorBox.style.backgroundColor = colors[colorIndex];
-                statusText.innerText = "Color Updated";
-                lastPinchTime = now;
-            }
-            
-            // ACTION 2: FIST (Erase Canvas)
-            else if (isFist) {
-                statusText.innerText = "Purging Canvas...";
-                inkParticles.forEach(p => Composite.remove(world, p));
-                inkParticles = [];
-                handColliders.forEach(c => Body.setPosition(c, { x: -1000, y: -1000 })); // Hide hands
-            }
-
-            // ACTION 3: INDEX UP (Constructing/Drawing)
-            else if (isDrawing) {
-                statusText.innerText = "Constructing Object...";
-                handColliders.forEach(c => Body.setPosition(c, { x: -1000, y: -1000 })); // Hide colliders while drawing
-                
-                const ink = Bodies.circle(mapX(landmarks[8].x), mapY(landmarks[8].y), 15, {
-                    isStatic: true, // Floats exactly where you draw it
-                    restitution: 0.8, // Bouncy!
-                    render: { fillStyle: colors[colorIndex] }
-                });
-                
-                inkParticles.push(ink);
-                Composite.add(world, ink);
-            }
-
-            // ACTION 4: OPEN HAND (Drop & Play)
-            else if (isOpenHand) {
-                statusText.innerText = "Physics Activated";
-                
-                // 1. Turn on gravity and un-freeze drawings
-                engine.gravity.y = 1; 
-                inkParticles.forEach(p => {
-                    if (p.isStatic) Body.setStatic(p, false);
-                });
-
-                // 2. Map Holographic physics colliders to your actual fingers
-                // Landmarks: 4(Thumb), 8(Index), 12(Middle), 16(Ring), 20(Pinky), 9(Palm center)
-                const points = [4, 8, 12, 16, 20, 9]; 
-                
-                points.forEach((lmIndex, i) => {
-                    Body.setPosition(handColliders[i], {
-                        x: mapX(landmarks[lmIndex].x), 
-                        y: mapY(landmarks[lmIndex].y)
-                    });
-                });
-            } 
-            
-            // Default: Hide colliders if gesture is unrecognized
-            else {
+            // DRAWING LOGIC
+            if (isDraw) {
+                if (!isDrawingMode) { isDrawingMode = true; currentStroke = []; }
+                currentStroke.push({ x: mapX(lm[8].x), y: mapY(lm[8].y) });
+                statusText.innerText = "Analyzing Input...";
                 handColliders.forEach(c => Body.setPosition(c, { x: -1000, y: -1000 }));
-                statusText.innerText = "Standby...";
+            } else {
+                if (isDrawingMode) {
+                    isDrawingMode = false;
+                    analyzeAndCreateShape();
+                    currentStroke = [];
+                }
+
+                // PINCH -> NEXT COLOR
+                if (isPinch && now - lastActionTime > 500) {
+                    colorIndex = (colorIndex + 1) % colors.length;
+                    colorBox.style.backgroundColor = colors[colorIndex];
+                    lastActionTime = now;
+                }
+                // PINKY -> UNDO
+                else if (isUndo && now - lastActionTime > 800) {
+                    if (history.length > 0) {
+                        const lastItem = history.pop();
+                        lastItem.forEach(part => Composite.remove(engine.world, part));
+                        statusText.innerText = "Action Undone";
+                    }
+                    lastActionTime = now;
+                }
+                // FILL COLOR -> INDEX + MIDDLE
+                else if (isFill && now - lastActionTime > 300) {
+                    const pointerX = mapX(lm[8].x);
+                    const pointerY = mapY(lm[8].y);
+                    const bodiesUnderFinger = Query.point(Composite.allBodies(engine.world), {x: pointerX, y: pointerY});
+                    
+                    if (bodiesUnderFinger.length > 0) {
+                        const target = bodiesUnderFinger[0];
+                        if (!target.isStatic || target === floor) return; // Don't paint the floor or hand colliders
+                        target.render.fillStyle = colors[colorIndex];
+                        statusText.innerText = "Material Updated";
+                        lastActionTime = now;
+                    }
+                }
+                // FIST -> PURGE
+                else if (isFist) {
+                    history.forEach(group => group.forEach(part => Composite.remove(engine.world, part)));
+                    history = [];
+                    statusText.innerText = "Canvas Purged";
+                }
+                // OPEN HAND -> PHYSICS
+                else if (isOpenHand) {
+                    statusText.innerText = "Physics Activated";
+                    engine.gravity.y = 1;
+                    Composite.allBodies(engine.world).forEach(b => { 
+                        if (b.isStatic && b !== floor && !handColliders.includes(b)) Body.setStatic(b, false); 
+                    });
+
+                    const points = [4, 8, 12, 16, 20, 9];
+                    points.forEach((lmIndex, i) => {
+                        Body.setPosition(handColliders[i], { x: mapX(lm[lmIndex].x), y: mapY(lm[lmIndex].y) });
+                    });
+                }
             }
         });
 
-        // --- 4. Start Webcam ---
-        const camera = new Camera(videoElement, {
+        // --- 5. Start Camera ---
+        new Camera(videoElement, {
             onFrame: async () => { await hands.send({image: videoElement}); },
             width: 1280, height: 720
-        });
-        
-        camera.start()
-            .then(() => { statusText.innerText = "System Online"; })
-            .catch(err => { statusText.innerText = "Camera Access Denied"; });
+        }).start().then(() => statusText.innerText = "System Online");
     </script>
 </body>
 </html>
