@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Air Gesture Physics Drawing</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: sans-serif;
+        }
+
+        /* Mirror the video and canvas so it acts like a mirror */
+        .mirrored {
+            transform: scaleX(-1);
+        }
+
+        /* Video acts as the background */
+        #camera-feed {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            z-index: 0;
+        }
+
+        /* Canvas for physics drawing sits on top */
+        #physics-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+            pointer-events: none; /* Let clicks pass through if needed */
+        }
+
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 2;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+        }
+
+        .instruction { font-size: 14px; margin: 5px 0; }
+        .color-indicator { 
+            display: inline-block; 
+            width: 15px; 
+            height: 15px; 
+            border-radius: 50%; 
+            vertical-align: middle;
+        }
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+</head>
+<body>
+
+    <video id="camera-feed" class="mirrored" autoplay playsinline></video>
+    <canvas id="physics-canvas" class="mirrored"></canvas>
+
+    <div id="ui-overlay">
+        <h3>Air Physics App</h3>
+        <div class="instruction">☝️ <b>Index Finger Up:</b> Draw</div>
+        <div class="instruction">✊ <b>Fist:</b> Drop (Gravity)</div>
+        <div class="instruction">🖐️ <b>Open Hand:</b> Wipe/Erase Screen</div>
+        <div class="instruction">🤏 <b>Pinch (Thumb + Index):</b> Change Color</div>
+        <hr>
+        <div class="instruction">Current Color: <span id="color-box" class="color-indicator" style="background-color: #ff3b30;"></span></div>
+        <div class="instruction">Status: <span id="status-text">Loading Camera...</span></div>
+    </div>
+
+    <script>
+        // --- 1. Setup Matter.js Physics ---
+        const Engine = Matter.Engine,
+              Render = Matter.Render,
+              Runner = Matter.Runner,
+              Bodies = Matter.Bodies,
+              Composite = Matter.Composite,
+              Body = Matter.Body;
+
+        const engine = Engine.create();
+        const world = engine.world;
+        engine.gravity.y = 0; // Start with NO gravity (objects float)
+
+        const canvas = document.getElementById('physics-canvas');
+        const render = Render.create({
+            canvas: canvas,
+            engine: engine,
+            options: {
+                width: window.innerWidth,
+                height: window.innerHeight,
+                wireframes: false,
+                background: 'transparent' // See the camera behind
+            }
+        });
+
+        // Add a floor so falling objects don't disappear forever
+        const floor = Bodies.rectangle(window.innerWidth / 2, window.innerHeight + 25, window.innerWidth, 50, { isStatic: true });
+        Composite.add(world, floor);
+
+        Render.run(render);
+        const runner = Runner.create();
+        Runner.run(runner, engine);
+
+        window.addEventListener('resize', () => {
+            render.canvas.width = window.innerWidth;
+            render.canvas.height = window.innerHeight;
+            Body.setPosition(floor, { x: window.innerWidth / 2, y: window.innerHeight + 25 });
+        });
+
+        // --- 2. App State Variables ---
+        let inkParticles = [];
+        let gravityActive = false;
+        const colors = ['#ff3b30', '#34c759', '#007aff', '#ffcc00', '#af52de', '#ffffff'];
+        let colorIndex = 0;
+        let lastPinchTime = 0;
+        const statusText = document.getElementById('status-text');
+        const colorBox = document.getElementById('color-box');
+
+        // --- 3. Setup MediaPipe Hands ---
+        const videoElement = document.getElementById('camera-feed');
+        
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+
+        // Helper function to check if a finger is "up" (tip is above the middle joint)
+        function isFingerUp(landmarks, tipIndex, pipIndex) {
+            return landmarks[tipIndex].y < landmarks[pipIndex].y;
+        }
+
+        // Calculate distance between two points (for pinching)
+        function getDistance(p1, p2) {
+            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+        }
+
+        // The main callback when a hand is detected
+        hands.onResults((results) => {
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                return;
+            }
+
+            const landmarks = results.multiHandLandmarks[0];
+
+            // MediaPipe Landmark Indices:
+            // Thumb tip: 4, Index tip: 8, Middle tip: 12, Ring tip: 16, Pinky tip: 20
+            // PIP (middle joints): Index 6, Middle 10, Ring 14, Pinky 18
+
+            const indexUp = isFingerUp(landmarks, 8, 6);
+            const middleUp = isFingerUp(landmarks, 12, 10);
+            const ringUp = isFingerUp(landmarks, 16, 14);
+            const pinkyUp = isFingerUp(landmarks, 20, 18);
+            const pinchDist = getDistance(landmarks[4], landmarks[8]);
+
+            // Map hand coordinates to screen coordinates
+            // Note: Canvas is mirrored, so we map X directly (0 to 1 -> 0 to width)
+            const x = landmarks[8].x * window.innerWidth;
+            const y = landmarks[8].y * window.innerHeight;
+
+            const now = Date.now();
+
+            // Logic 1: PINCH TO CHANGE COLOR
+            if (pinchDist < 0.05 && now - lastPinchTime > 500) { // 500ms cooldown
+                colorIndex = (colorIndex + 1) % colors.length;
+                colorBox.style.backgroundColor = colors[colorIndex];
+                statusText.innerText = "Color Changed!";
+                lastPinchTime = now;
+            }
+            
+            // Logic 2: OPEN HAND TO ERASE (All fingers up)
+            else if (indexUp && middleUp && ringUp && pinkyUp) {
+                statusText.innerText = "Wiping Screen...";
+                inkParticles.forEach(p => Composite.remove(world, p));
+                inkParticles = [];
+                engine.gravity.y = 0;
+                gravityActive = false;
+            }
+
+            // Logic 3: FIST TO DROP (All fingers down)
+            else if (!indexUp && !middleUp && !ringUp && !pinkyUp) {
+                if (!gravityActive && inkParticles.length > 0) {
+                    statusText.innerText = "Gravity ON! Dropping...";
+                    engine.gravity.y = 1; // Turn on gravity
+                    gravityActive = true;
+                    // Make all drawings susceptible to gravity
+                    inkParticles.forEach(p => Body.setStatic(p, false));
+                }
+            }
+
+            // Logic 4: INDEX FINGER TO DRAW (Only index is up)
+            else if (indexUp && !middleUp && !ringUp && !pinkyUp) {
+                statusText.innerText = "Drawing...";
+                
+                // Spawn a tiny circle (ink particle) at the index finger tip
+                const ink = Bodies.circle(x, y, 12, {
+                    isStatic: !gravityActive, // Stays in air unless gravity is already on
+                    restitution: 0.6,         // Bounciness
+                    friction: 0.5,
+                    render: {
+                        fillStyle: colors[colorIndex]
+                    }
+                });
+                
+                inkParticles.push(ink);
+                Composite.add(world, ink);
+            } else {
+                statusText.innerText = "Tracking Hand...";
+            }
+        });
+
+        // --- 4. Start Webcam ---
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+        
+        camera.start()
+            .then(() => { statusText.innerText = "Ready! Show your hand."; })
+            .catch(err => { statusText.innerText = "Error accessing camera."; console.error(err); });
+
+    </script>
+</body>
+</html>
