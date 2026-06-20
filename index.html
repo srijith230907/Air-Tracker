@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Air Tracker: Symmetric Spatial Node</title>
+    <title>Air Tracker: Calibrated Spatial Node</title>
     <style>
         body, html { margin: 0; padding: 0; overflow: hidden; background-color: #020208; font-family: 'Courier New', Courier, monospace; }
         
@@ -19,6 +19,22 @@
             background: rgba(0, 10, 25, 0.85); border: 1px solid #00f3ff;
             box-shadow: 0 0 15px rgba(0, 243, 255, 0.4); color: #00f3ff; padding: 20px;
             border-radius: 6px; text-transform: uppercase; letter-spacing: 1px;
+            max-width: 320px;
+        }
+
+        /* Calibration visual targets */
+        #calib-target {
+            position: absolute; width: 40px; height: 40px;
+            border: 3px dashed #00f3ff; border-radius: 50%;
+            z-index: 3; display: none; transform: translate(-50%, -50%);
+            box-shadow: 0 0 15px #00f3ff;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: translate(-50%, -50%) scale(0.9); opacity: 0.6; }
+            50% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(0.9); opacity: 0.6; }
         }
         
         h3 { margin-top: 0; border-bottom: 1px solid #00f3ff; padding-bottom: 10px; font-size: 16px; }
@@ -27,6 +43,12 @@
             display: inline-block; width: 14px; height: 14px; 
             border-radius: 50%; vertical-align: middle; box-shadow: 0 0 8px currentColor;
         }
+        .btn-action {
+            background: transparent; border: 1px solid #00f3ff; color: #00f3ff;
+            padding: 5px 10px; cursor: pointer; text-transform: uppercase; font-family: monospace;
+            margin-top: 10px; display: inline-block; width: 100%; text-align: center;
+        }
+        .btn-action:hover { background: rgba(0, 243, 255, 0.2); }
     </style>
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -38,25 +60,35 @@
 
     <video id="camera-feed" autoplay playsinline></video>
     <div id="canvas3d"></div>
+    <div id="calib-target"></div>
 
     <div id="ui-overlay">
-        <h3>Air Tracker Workspace</h3>
-        <div class="instruction">☝️ <b>Index Up:</b> Draw Shape (Locked to Index Tip)</div>
-        <div class="instruction">✊ <b>Fist:</b> Tactile Spatial Eraser (Wipe Points)</div>
-        <div class="instruction">🖐️ <b>Open Hand:</b> Shatter / Gravity Fields</div>
-        <div class="instruction">🔄 <b>Both Index Up:</b> Rotate/Orbit 3D World</div>
-        <div class="instruction">↔️ <b>Both Hands Pinch:</b> Zoom Camera In/Out</div>
-        <div class="instruction">🤙 <b>Pinky Up:</b> Step Back (Undo State)</div>
-        <div class="instruction">🤏 <b>Single Pinch:</b> Next Color Matrix</div>
+        <h3 id="panel-title">System Initialization</h3>
+        <div id="calibration-controls">
+            <p class="instruction" style="color: #ff0055;"><b>[STAGE 1: CALIBRATION REQUIRED]</b></p>
+            <p class="instruction" id="calib-desc">Align your index finger tip to the flashing node and hold still to index constraints.</p>
+            <div id="calib-btn" class="btn-action">Lock Corner Reference</div>
+        </div>
+        <div id="workspace-controls" style="display: none;">
+            <div class="instruction">☝️ <b>Index Up:</b> Smooth 3D Draw</div>
+            <div class="instruction">✊ <b>Fist:</b> Tactile Spatial Eraser</div>
+            <div class="instruction">🖐️ <b>Open Hand:</b> Crumble to Voxels</div>
+            <div class="instruction">🔄 <b>Both Index Up:</b> Rotate 3D Space</div>
+            <div class="instruction">↔️ <b>Both Hands Pinch:</b> Zoom Viewports</div>
+            <div class="instruction">🤙 <b>Pinky Up:</b> Step Back (Undo Object)</div>
+            <div class="instruction">🤏 <b>Single Pinch:</b> Cycle Core Color</div>
+            <hr style="border-color: #00f3ff44;">
+            <div class="instruction">Active Color: <span id="color-box" class="color-indicator" style="background-color: #00f3ff;"></span></div>
+            <div class="btn-action" id="recalib-trigger">Recalibrate Optics</div>
+        </div>
         <hr style="border-color: #00f3ff44;">
-        <div class="instruction">Active Mesh Color: <span id="color-box" class="color-indicator" style="background-color: #00f3ff;"></span></div>
-        <div class="instruction">System Telemetry: <span id="status-text" style="color: #fff;">Mapping Workspace Matrix...</span></div>
+        <div class="instruction">Telemetry: <span id="status-text" style="color: #fff;">Booting Matrices...</span></div>
     </div>
 
     <script>
-        // --- 1. Coordinate Low-Pass Filter Smoothing Core ---
+        // --- 1. Signal Smoothing (Low-Pass Filter) ---
         class CoordinateSmoother {
-            constructor(windowSize = 5) {
+            constructor(windowSize = 4) {
                 this.windowSize = windowSize;
                 this.buffer = [];
             }
@@ -72,14 +104,13 @@
 
         const handSmoothers = [new CoordinateSmoother(), new CoordinateSmoother()];
 
-        // --- 2. Three.js Environment Initialization ---
+        // --- 2. Three.js Initialization ---
         const container = document.getElementById('canvas3d');
         const scene = new THREE.Scene();
         
         const camera3d = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
         camera3d.position.set(0, 0, 5);
 
-        // Core visual transformation containment cell
         const globalWorkspaceGroup = new THREE.Group();
         scene.add(globalWorkspaceGroup);
 
@@ -92,7 +123,14 @@
         directionalLight.position.set(5, 12, 8);
         scene.add(directionalLight);
 
-        // --- 3. Kinetic State Arrays ---
+        // --- 3. App States & Calibration Matrices ---
+        let appMode = 'CALIBRATION'; // Modes: CALIBRATION, WORKSPACE
+        let calibStep = 0;           // 0: Top-Left, 1: Top-Right, 2: Bottom-Left, 3: Bottom-Right
+        
+        // Calibration bounds recorded from actual tracking streams
+        let calibBounds = { minX: 0.15, maxX: 0.85, minY: 0.15, maxY: 0.85 };
+        let currentRawTrackingFrame = { x: 0.5, y: 0.5 }; // Stores active index position for calibration latching
+
         let physicalObjects = [];
         let objectHistory = [];
         const colors = [0x00f3ff, 0xff0055, 0x00ff66, 0xffcc00, 0xb026ff, 0xffffff];
@@ -102,21 +140,103 @@
 
         const statusText = document.getElementById('status-text');
         const colorBox = document.getElementById('color-box');
+        const calibTargetEl = document.getElementById('calib-target');
 
-        // Dynamic multi-stream layout tracking array
         let handTrackingData = [
             { isDrawing: false, strokePoints: [], liveLineMesh: null },
             { isDrawing: false, strokePoints: [], liveLineMesh: null }
         ];
 
-        // Unique glow nodes mapping tracking nodes directly inside Three.js space
         const handTrackers = [];
         const trackerGeo = new THREE.SphereGeometry(0.05, 16, 16);
         for(let i=0; i<10; i++) {
             const mesh = new THREE.Mesh(trackerGeo, new THREE.MeshBasicMaterial({ color: 0x00f3ff, wireframe: true }));
             mesh.visible = false;
-            scene.add(mesh); // Render tracker overlays independent of global workspace rotation transforms
+            scene.add(mesh);
             handTrackers.push(mesh);
+        }
+
+        // --- 4. Dynamic Calibration Target Mapping ---
+        const targetScreenPositions = [
+            { x: 50, y: 50 },     // Top-Left (margins in pixels)
+            { x: window.innerWidth - 50, y: 50 }, // Top-Right
+            { x: 50, y: window.innerHeight - 50 }, // Bottom-Left
+            { x: window.innerWidth - 50, y: window.innerHeight - 50 } // Bottom-Right
+        ];
+
+        function updateCalibrationUI() {
+            if (appMode !== 'CALIBRATION') {
+                calibTargetEl.style.display = 'none';
+                document.getElementById('calibration-controls').style.display = 'none';
+                document.getElementById('workspace-controls').style.display = 'block';
+                document.getElementById('panel-title').innerText = "Air Tracker Active Node";
+                return;
+            }
+            
+            document.getElementById('calibration-controls').style.display = 'block';
+            document.getElementById('workspace-controls').style.display = 'none';
+            document.getElementById('panel-title').innerText = "Optic Calibration";
+            
+            const stepsText = ["TOP-LEFT Anchor", "TOP-RIGHT Anchor", "BOTTOM-LEFT Anchor", "BOTTOM-RIGHT Anchor"];
+            document.getElementById('calib-desc').innerHTML = `Extend your index finger and hold it directly over the flashing node at the <b style='color:#00f3ff;'>${stepsText[calibStep]}</b>. Then click the lock button.`;
+            
+            const currentPos = targetScreenPositions[calibStep];
+            calibTargetEl.style.left = `${currentPos.x}px`;
+            calibTargetEl.style.top = `${currentPos.y}px`;
+            calibTargetEl.style.display = 'block';
+        }
+        updateCalibrationUI();
+
+        // Latch tracking boundaries on button press
+        document.getElementById('calib-btn').addEventListener('click', () => {
+            if (appMode !== 'CALIBRATION') return;
+            
+            if (calibStep === 0) calibBounds.minX = currentRawTrackingFrame.x;
+            if (calibStep === 1) calibBounds.maxX = currentRawTrackingFrame.x;
+            if (calibStep === 2) calibBounds.minY = currentRawTrackingFrame.y;
+            if (calibStep === 3) {
+                calibBounds.maxY = currentRawTrackingFrame.y;
+                // Enforce safety margins to avoid divide-by-zero on structural error readings
+                if(Math.abs(calibBounds.maxX - calibBounds.minX) < 0.1) { calibBounds.minX = 0.2; calibBounds.maxX = 0.8; }
+                if(Math.abs(calibBounds.maxY - calibBounds.minY) < 0.1) { calibBounds.minY = 0.2; calibBounds.maxY = 0.8; }
+                
+                appMode = 'WORKSPACE';
+                statusText.innerText = "Optics Synced Perfectly.";
+                updateCalibrationUI();
+                return;
+            }
+            
+            calibStep++;
+            updateCalibrationUI();
+        });
+
+        document.getElementById('recalib-trigger').addEventListener('click', () => {
+            appMode = 'CALIBRATION';
+            calibStep = 0;
+            updateCalibrationUI();
+        });
+
+        // --- 5. Unprojection Coordinate Mapping (Calibrated) ---
+        function getCalibratedWorldPoint(rawNormX, rawNormY, targetDepthZ) {
+            // Apply custom calibration normalization transformations
+            let normalizedX = (rawNormX - calibBounds.minX) / (calibBounds.maxX - calibBounds.minX);
+            let normalizedY = (rawNormY - calibBounds.minY) / (calibBounds.maxY - calibBounds.minY);
+            
+            // Constrain limits safely between absolute window borders
+            normalizedX = THREE.MathUtils.clamp(normalizedX, 0.0, 1.0);
+            normalizedY = THREE.MathUtils.clamp(normalizedY, 0.0, 1.0);
+
+            // Turn into Normalized Device Coordinates (NDC) for unprojection mapping loops
+            let ndcX = (1.0 - normalizedX) * 2 - 1; // Correct horizontal mirroring
+            let ndcY = (1.0 - normalizedY) * 2 - 1;
+
+            let vector = new THREE.Vector3(ndcX, ndcY, 0.5);
+            vector.unproject(camera3d);
+
+            let rayDirection = vector.sub(camera3d.position).normalize();
+            let rayDistance = (targetDepthZ - camera3d.position.z) / rayDirection.z;
+            
+            return camera3d.position.clone().addScaledVector(rayDirection, rayDistance);
         }
 
         function updateLiveLine(handIdx) {
@@ -130,22 +250,7 @@
             globalWorkspaceGroup.add(data.liveLineMesh);
         }
 
-        // --- 4. Unprojection Unwrapping Matrix Transformation Core ---
-        // Converts MediaPipe's flat 2D viewport fields cleanly to actual 3D tracking vectors matching the camera frustum exactly
-        function unprojectScreenToWorld(normX, normY, customDepthZ) {
-            let ndcX = (1.0 - normX) * 2 - 1; // Direct screen inversion handling matching mirrored canvas
-            let ndcY = (1.0 - normY) * 2 - 1;
-
-            let vector = new THREE.Vector3(ndcX, ndcY, 0.5);
-            vector.unproject(camera3d);
-
-            let dir = vector.sub(camera3d.position).normalize();
-            let distance = (customDepthZ - camera3d.position.z) / dir.z;
-            
-            return camera3d.position.clone().addScaledVector(dir, distance);
-        }
-
-        // --- 5. Shape Topology Classification Engine ---
+        // --- 6. Intelligent Geometric Mesh Builder ---
         function computeAndBuild3DShape(points) {
             if (points.length < 6) return;
 
@@ -209,7 +314,7 @@
             objectHistory.push([mesh]);
         }
 
-        // --- 6. Physics Simulation Runtime Engine ---
+        // --- 7. Kinetic Core Physics Engine ---
         const clock = new THREE.Clock();
         function animatePhysicsEngine() {
             requestAnimationFrame(animatePhysicsEngine);
@@ -219,7 +324,6 @@
                 const obj = physicalObjects[i];
                 if (obj.userData.isStatic) continue;
 
-                // Gravitational acceleration calculation
                 obj.userData.velocity.y -= 9.8 * dt;
                 obj.position.addScaledVector(obj.userData.velocity, dt);
 
@@ -228,10 +332,9 @@
                     obj.rotation.y += obj.userData.rotSpeed.y * dt;
                 }
 
-                // Dynamic Workspace Boundary Check (Virtual spatial floor matrix)
                 if (obj.position.y < -2.2) {
                     obj.position.y = -2.2;
-                    obj.userData.velocity.y *= -0.35; // Friction bounce compression vectors
+                    obj.userData.velocity.y *= -0.35;
                     obj.userData.velocity.x *= 0.85;
                     obj.userData.velocity.z *= 0.85;
                 }
@@ -240,170 +343,185 @@
         }
         animatePhysicsEngine();
 
-        // --- 7. Dual-Hand Structural Workspace Mapping Architecture ---
+        // --- 8. Symmetric Tracking Engine Implementation ---
         const videoElement = document.getElementById('camera-feed');
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
         
         hands.setOptions({
             maxNumHands: 2,
             modelComplexity: 1,
-            minDetectionConfidence: 0.45, // Lower threshold ensures the camera maintains structural lock easily
-            minTrackingConfidence: 0.85   // Restricts frame mutations to optimize mapping accuracy
+            minDetectionConfidence: 0.45,
+            minTrackingConfidence: 0.85
         });
 
         function checkFingerUp(lm, t, p) { return lm[t].y < lm[p].y; }
 
         hands.onResults((results) => {
-            // Re-index all standard node states across active frames
             handTrackers.forEach(t => { t.visible = false; t.userData.isEraserMode = false; t.material.color.setHex(0x00f3ff); });
             let universalState = { pinchCount: 0, drawCount: 0, undo: false, pinchPositions: [] };
 
-            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const numHands = results.multiHandLandmarks.length;
-
-                results.multiHandLandmarks.forEach((lm, handIdx) => {
-                    if (handIdx >= 2) return;
-
-                    const iUp = checkFingerUp(lm, 8, 6), mUp = checkFingerUp(lm, 12, 10), rUp = checkFingerUp(lm, 16, 14), pUp = checkFingerUp(lm, 20, 18);
-                    const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
-
-                    // Compute clean depth metrics natively utilizing palm scaling
-                    const depthZ = lerp(-1.5, -3.5, (lm[0].z + 0.1) * 5);
-                    
-                    // Unproject raw screen parameters to true spatial tracking coordinates matching screen aspect configurations perfectly
-                    let worldIndexTip = unprojectScreenToWorld(lm[8].x, lm[8].y, depthZ);
-                    let smoothedVector = handSmoothers[handIdx].addAndSmooth(worldIndexTip);
-
-                    // Translate world system tracking metrics cleanly down into rotating global workspace parameters
-                    let localPoint = smoothedVector.clone();
-                    globalWorkspaceGroup.worldToLocal(localPoint);
-
-                    const isDraw = iUp && !mUp && !rUp && !pUp;
-                    const isShatter = iUp && mUp && rUp && pUp;
-                    const isEraser = !iUp && !mUp && !rUp && !pUp; // Fist gesture ✊
-                    const isPinch = pinchDist < 0.045 && !mUp;
-
-                    if (isPinch) { universalState.pinchCount++; universalState.pinchPositions.push(smoothedVector); }
-                    if (isDraw) universalState.drawCount++;
-                    if (pUp && !iUp && !mUp && !rUp) universalState.undo = true;
-
-                    // Bind tracking dots onto fingertip landmark positions
-                    const fingerIndices = [4, 8, 12, 16, 20];
-                    fingerIndices.forEach((fId, fIdx) => {
-                        let idx = (handIdx * 5) + fIdx;
-                        if(idx < handTrackers.length) {
-                            let node = handTrackers[idx];
-                            let worldFingerPos = unprojectScreenToWorld(lm[fId].x, lm[fId].y, depthZ);
-                            node.position.copy(worldFingerPos);
-                            node.visible = true;
-                            if (isEraser) { node.userData.isEraserMode = true; node.material.color.setHex(0xff0055); }
-                        }
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                if(appMode === 'WORKSPACE') {
+                    handTrackingData.forEach((data, index) => {
+                        if(data.isDrawing) { data.isDrawing = false; computeAndBuild3DShape(data.strokePoints); data.strokePoints = []; updateLiveLine(index); }
                     });
-
-                    // --- Processing Simultaneous Multi-Hand Workspace Tracking Locks ---
-                    if (numHands === 2 && universalState.drawCount === 2) {
-                        statusText.innerText = "Symmetric Global Canvas Rotation Active";
-                        globalWorkspaceGroup.rotation.y += ((1.0 - lm[8].x) - 0.5) * 0.025;
-                        globalWorkspaceGroup.rotation.x += (0.5 - lm[8].y) * 0.025;
-                        return;
-                    }
-
-                    if (numHands === 2 && universalState.pinchCount === 2) {
-                        statusText.innerText = "Symmetric Workspace Zoom Processing";
-                        let currentDist = universalState.pinchPositions[0].distanceTo(universalState.pinchPositions[1]);
-                        if (initialZoomDistance === null) {
-                            initialZoomDistance = currentDist;
-                        } else {
-                            let zoomFactor = currentDist / initialZoomDistance;
-                            camera3d.position.z = THREE.MathUtils.clamp(camera3d.position.z / (zoomFactor * 0.97), 1.8, 12.0);
-                            initialZoomDistance = currentDist;
-                        }
-                        return;
-                    } else {
-                        initialZoomDistance = null;
-                    }
-
-                    // --- Processing Independent Single Hand Matrix Operations ---
-                    if (isDraw && universalState.drawCount === 1) {
-                        let data = handTrackingData[handIdx];
-                        if (!data.isDrawing) { data.isDrawing = true; data.strokePoints = []; }
-                        data.strokePoints.push(localPoint);
-                        statusText.innerText = `Hand [${handIdx + 1}] Index Locked Vector Stream`;
-                        updateLiveLine(handIdx);
-                    } else {
-                        let data = handTrackingData[handIdx];
-                        if (data.isDrawing) {
-                            data.isDrawing = false;
-                            computeAndBuild3DShape(data.strokePoints);
-                            data.strokePoints = [];
-                            updateLiveLine(handIdx);
-                        }
-
-                        if (isEraser) {
-                            statusText.innerText = `Hand [${handIdx + 1}] Local Deletion Active`;
-                            let localEraseCenter = unprojectScreenToWorld(lm[9].x, lm[9].y, depthZ);
-                            globalWorkspaceGroup.worldToLocal(localEraseCenter);
-
-                            for (let k = physicalObjects.length - 1; k >= 0; k--) {
-                                let obj = physicalObjects[k];
-                                if (obj.position.distanceTo(localEraseCenter) < 0.55) {
-                                    globalWorkspaceGroup.remove(obj);
-                                    physicalObjects.splice(k, 1);
-                                }
-                            }
-                        }
-                        else if (isShatter) {
-                            statusText.innerText = "Voxel Disruption Signal Transmitted";
-                            let targets = physicalObjects.filter(obj => obj.userData.isStatic);
-
-                            targets.forEach(parentObj => {
-                                globalWorkspaceGroup.remove(parentObj);
-                                physicalObjects = physicalObjects.filter(item => item !== parentObj);
-
-                                if(parentObj.userData.type === 'freeform') {
-                                    parentObj.children.forEach(child => {
-                                        let worldPos = new THREE.Vector3();
-                                        child.getWorldPosition(worldPos);
-                                        globalWorkspaceGroup.attach(child);
-                                        child.userData = { isStatic: false, velocity: new THREE.Vector3((Math.random()-0.5)*2, Math.random()*2 + 1, (Math.random()-0.5)*2) };
-                                        physicalObjects.push(child);
-                                    });
-                                    return;
-                                }
-
-                                const blockScale = 0.12;
-                                const col = parentObj.material?.color || new THREE.Color(0x00f3ff);
-                                const clusterPos = parentObj.position.clone();
-                                const voxMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.4 });
-                                const voxGeo = new THREE.BoxGeometry(blockScale, blockScale, blockScale);
-                                
-                                let generatedBlocks = [];
-                                for (let x = -2; x <= 2; x++) {
-                                    for (let y = -2; y <= 2; y++) {
-                                        let instanceMesh = new THREE.Mesh(voxGeo, voxMat);
-                                        instanceMesh.position.set(clusterPos.x + (x * blockScale * 1.1), clusterPos.y + (y * blockScale * 1.1), clusterPos.z);
-                                        instanceMesh.userData = {
-                                            isStatic: false,
-                                            velocity: new THREE.Vector3((Math.random() - 0.5) * 3, Math.random() * 3 + 1, (Math.random() - 0.5) * 3),
-                                            rotSpeed: new THREE.Vector3(Math.random() * 4, Math.random() * 4, 0)
-                                        };
-                                        globalWorkspaceGroup.add(instanceMesh);
-                                        physicalObjects.push(instanceMesh);
-                                        generatedBlocks.push(instanceMesh);
-                                    }
-                                }
-                                objectHistory.push(generatedBlocks);
-                            });
-                        }
-                    }
-                });
-            } else {
-                handTrackingData.forEach((data, index) => {
-                    if(data.isDrawing) { data.isDrawing = false; computeAndBuild3DShape(data.strokePoints); data.strokePoints = []; updateLiveLine(index); }
-                });
+                }
+                return;
             }
 
-            // --- 8. Global State Evaluation Intersections ---
+            const numHands = results.multiHandLandmarks.length;
+
+            results.multiHandLandmarks.forEach((lm, handIdx) => {
+                if (handIdx >= 2) return;
+
+                // Continuously latch the active primary hand index coordinates for calibration monitoring updates
+                if (handIdx === 0) {
+                    currentRawTrackingFrame.x = lm[8].x;
+                    currentRawTrackingFrame.y = lm[8].y;
+                }
+
+                const iUp = checkFingerUp(lm, 8, 6), mUp = checkFingerUp(lm, 12, 10), rUp = checkFingerUp(lm, 16, 14), pUp = checkFingerUp(lm, 20, 18);
+                const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+
+                const depthZ = lerp(-1.5, -3.5, (lm[0].z + 0.1) * 5);
+                
+                // Get perfectly transformed vector tracking coordinates using the custom calibration boundary variables
+                let worldIndexTip = getCalibratedWorldPoint(lm[8].x, lm[8].y, depthZ);
+                let smoothedVector = handSmoothers[handIdx].addAndSmooth(worldIndexTip);
+
+                let localPoint = smoothedVector.clone();
+                globalWorkspaceGroup.worldToLocal(localPoint);
+
+                if (appMode === 'CALIBRATION') {
+                    statusText.innerText = `Raw Stream: X:${lm[8].x.toFixed(2)} Y:${lm[8].y.toFixed(2)}`;
+                    // Keep tracking node visible on index finger tip during calibration checks
+                    let calibOverlayNode = handTrackers[handIdx * 5 + 1];
+                    calibOverlayNode.position.copy(worldIndexTip);
+                    calibOverlayNode.visible = true;
+                    return; 
+                }
+
+                // --- Workspace Mode Execution Logic Block ---
+                const isDraw = iUp && !mUp && !rUp && !pUp;
+                const isShatter = iUp && mUp && rUp && pUp;
+                const isEraser = !iUp && !mUp && !rUp && !pUp;
+                const isPinch = pinchDist < 0.045 && !mUp;
+
+                if (isPinch) { universalState.pinchCount++; universalState.pinchPositions.push(smoothedVector); }
+                if (isDraw) universalState.drawCount++;
+                if (pUp && !iUp && !mUp && !rUp) universalState.undo = true;
+
+                // Sync 3D locator node markers onto fingertip constraints
+                [4, 8, 12, 16, 20].forEach((fId, fIdx) => {
+                    let idx = (handIdx * 5) + fIdx;
+                    if(idx < handTrackers.length) {
+                        let node = handTrackers[idx];
+                        node.position.copy(getCalibratedWorldPoint(lm[fId].x, lm[fId].y, depthZ));
+                        node.visible = true;
+                        if (isEraser) { node.userData.isEraserMode = true; node.material.color.setHex(0xff0055); }
+                    }
+                });
+
+                // Dual Hand Orbit Transformation Mechanics
+                if (numHands === 2 && universalState.drawCount === 2) {
+                    statusText.innerText = "Transforming View Direction Vector Matrix";
+                    globalWorkspaceGroup.rotation.y += ((1.0 - lm[8].x) - 0.5) * 0.025;
+                    globalWorkspaceGroup.rotation.x += (0.5 - lm[8].y) * 0.025;
+                    return;
+                }
+
+                // Dual Hand Zoom Matrix Mechanics
+                if (numHands === 2 && universalState.pinchCount === 2) {
+                    statusText.innerText = "Scaling Lens Distance Node";
+                    let currentDist = universalState.pinchPositions[0].distanceTo(universalState.pinchPositions[1]);
+                    if (initialZoomDistance === null) {
+                        initialZoomDistance = currentDist;
+                    } else {
+                        let zoomFactor = currentDist / initialZoomDistance;
+                        camera3d.position.z = THREE.MathUtils.clamp(camera3d.position.z / (zoomFactor * 0.97), 1.8, 12.0);
+                        initialZoomDistance = currentDist;
+                    }
+                    return;
+                } else {
+                    initialZoomDistance = null;
+                }
+
+                // Single Hand Canvas Stream Rendering Action Sets
+                if (isDraw && universalState.drawCount === 1) {
+                    let data = handTrackingData[handIdx];
+                    if (!data.isDrawing) { data.isDrawing = true; data.strokePoints = []; }
+                    data.strokePoints.push(localPoint);
+                    statusText.innerText = `Stream [${handIdx + 1}] Writing Vectors...`;
+                    updateLiveLine(handIdx);
+                } else {
+                    let data = handTrackingData[handIdx];
+                    if (data.isDrawing) {
+                        data.isDrawing = false;
+                        computeAndBuild3DShape(data.strokePoints);
+                        data.strokePoints = [];
+                        updateLiveLine(handIdx);
+                    }
+
+                    if (isEraser) {
+                        statusText.innerText = "Proximity Eraser Active";
+                        let localEraseCenter = getCalibratedWorldPoint(lm[9].x, lm[9].y, depthZ);
+                        globalWorkspaceGroup.worldToLocal(localEraseCenter);
+
+                        for (let k = physicalObjects.length - 1; k >= 0; k--) {
+                            let obj = physicalObjects[k];
+                            if (obj.position.distanceTo(localEraseCenter) < 0.55) {
+                                globalWorkspaceGroup.remove(obj);
+                                physicalObjects.splice(k, 1);
+                            }
+                        }
+                    }
+                    else if (isShatter) {
+                        statusText.innerText = "Shatter Disruption Field Engaged";
+                        let targets = physicalObjects.filter(obj => obj.userData.isStatic);
+
+                        targets.forEach(parentObj => {
+                            globalWorkspaceGroup.remove(parentObj);
+                            physicalObjects = physicalObjects.filter(item => item !== parentObj);
+
+                            if(parentObj.userData.type === 'freeform') {
+                                parentObj.children.forEach(child => {
+                                    let worldPos = new THREE.Vector3();
+                                    child.getWorldPosition(worldPos);
+                                    globalWorkspaceGroup.attach(child);
+                                    child.userData = { isStatic: false, velocity: new THREE.Vector3((Math.random()-0.5)*2, Math.random()*2 + 1, (Math.random()-0.5)*2) };
+                                    physicalObjects.push(child);
+                                });
+                                return;
+                            }
+
+                            const blockScale = 0.12;
+                            const col = parentObj.material?.color || new THREE.Color(0x00f3ff);
+                            const clusterPos = parentObj.position.clone();
+                            const voxMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.4 });
+                            const voxGeo = new THREE.BoxGeometry(blockScale, blockScale, blockScale);
+                            
+                            let generatedBlocks = [];
+                            for (let x = -2; x <= 2; x++) {
+                                for (let y = -2; y <= 2; y++) {
+                                    let instanceMesh = new THREE.Mesh(voxGeo, voxMat);
+                                    instanceMesh.position.set(clusterPos.x + (x * blockScale * 1.1), clusterPos.y + (y * blockScale * 1.1), clusterPos.z);
+                                    instanceMesh.userData = {
+                                        isStatic: false,
+                                        velocity: new THREE.Vector3((Math.random() - 0.5) * 3, Math.random() * 3 + 1, (Math.random() - 0.5) * 3),
+                                        rotSpeed: new THREE.Vector3(Math.random() * 4, Math.random() * 4, 0)
+                                    };
+                                    globalWorkspaceGroup.add(instanceMesh);
+                                    physicalObjects.push(instanceMesh);
+                                    generatedBlocks.push(instanceMesh);
+                                }
+                            }
+                            objectHistory.push(generatedBlocks);
+                        });
+                    }
+                }
+            });
+
+            // Global configurations checks
             const now = Date.now();
             if (universalState.pinchCount === 1 && now - lastActionTime > 400) {
                 colorIndex = (colorIndex + 1) % colors.length;
@@ -418,7 +536,7 @@
                         globalWorkspaceGroup.remove(el);
                         physicalObjects = physicalObjects.filter(item => item !== el);
                     });
-                    statusText.innerText = "State Log Recalled";
+                    statusText.innerText = "Buffer Rolled Back";
                 }
                 lastActionTime = now;
             }
@@ -433,7 +551,7 @@
         new Camera(videoElement, {
             onFrame: async () => { await hands.send({image: videoElement}); },
             width: 1280, height: 720
-        }).start().then(() => statusText.innerText = "Tracking Network Configured");
+        }).start().then(() => statusText.innerText = "Optic Array Configured.");
     </script>
 </body>
 </html>
