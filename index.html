@@ -3,17 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Air Tracker 3D Spatial Engine</title>
+    <title>Air Tracker: Dual-Hand Spatial Engine</title>
     <style>
         body, html { margin: 0; padding: 0; overflow: hidden; background-color: #020208; font-family: 'Courier New', Courier, monospace; }
         
-        /* The camera feed sits in the background */
         #camera-feed {
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
             object-fit: cover; z-index: 0; opacity: 0.35; transform: scaleX(-1);
         }
         
-        /* The 3D view sits cleanly over it */
         #canvas3d { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
         
         #ui-overlay {
@@ -42,15 +40,15 @@
     <div id="canvas3d"></div>
 
     <div id="ui-overlay">
-        <h3>Air Tracker 3D Spatial Node</h3>
-        <div class="instruction">☝️ <b>Index Up:</b> Project 3D Stroke</div>
-        <div class="instruction">🖐️ <b>Open Hand:</b> Shatter into Voxel Clouds</div>
-        <div class="instruction">🤘 <b>Rock Sign:</b> Purge Spatial Memory</div>
-        <div class="instruction">🤙 <b>Pinky Up:</b> Step Back (Undo)</div>
-        <div class="instruction">🤏 <b>Pinch:</b> Rotate Frequency Color</div>
+        <h3>Air Tracker Symmetric Node</h3>
+        <div class="instruction">☝️ <b>Index Up:</b> Draw Shape (Independent)</div>
+        <div class="instruction">✊ <b>Fist:</b> Tactile Hand Eraser (Wipe Space)</div>
+        <div class="instruction">🖐️ <b>Open Hand:</b> Shatter into 3D Blocks</div>
+        <div class="instruction">🤙 <b>Pinky Up:</b> Undo Last Object</div>
+        <div class="instruction">🤏 <b>Pinch:</b> Rotate Material Color</div>
         <hr style="border-color: #00f3ff44;">
-        <div class="instruction">Active Spectrum: <span id="color-box" class="color-indicator" style="background-color: #00f3ff;"></span></div>
-        <div class="instruction">System Array: <span id="status-text" style="color: #fff;">Mapping Room Matrix...</span></div>
+        <div class="instruction">Active Color: <span id="color-box" class="color-indicator" style="background-color: #00f3ff;"></span></div>
+        <div class="instruction">System Array: <span id="status-text" style="color: #fff;">Mapping Spatial Matrix...</span></div>
     </div>
 
     <script>
@@ -58,7 +56,6 @@
         const container = document.getElementById('canvas3d');
         const scene = new THREE.Scene();
         
-        // Perspective Camera allows true depth scaling
         const camera3d = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
         camera3d.position.set(0, 0, 5);
 
@@ -66,19 +63,15 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         container.appendChild(renderer.domElement);
 
-        // Advanced Sci-fi Lighting Array
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         scene.add(ambientLight);
         const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
         dirLight.position.set(5, 10, 7);
         scene.add(dirLight);
 
-        // --- 2. Physics & Tracking States ---
+        // --- 2. State & Physics Control Arrays ---
         let physicalObjects = [];
-        let drawingStrokePoints = [];
-        let isDrawingMode = false;
         let objectHistory = [];
-
         const colors = [0x00f3ff, 0xff0055, 0x00ff66, 0xffcc00, 0xb026ff, 0xffffff];
         let colorIndex = 0;
         let lastActionTime = 0;
@@ -86,38 +79,42 @@
         const statusText = document.getElementById('status-text');
         const colorBox = document.getElementById('color-box');
 
-        // Visible markers for all fingers on BOTH hands (Max 2 hands * 5 fingers = 10 trackers)
+        // Track independent drawing streams for Hand 0 and Hand 1
+        let handTrackingData = [
+            { isDrawing: false, strokePoints: [], liveLineMesh: null },
+            { isDrawing: false, strokePoints: [], liveLineMesh: null }
+        ];
+
+        // 10 Glow nodes for tracking 5 fingers on up to 2 hands simultaneously
         const handTrackers = [];
-        const trackerGeo = new THREE.SphereGeometry(0.08, 16, 16);
-        const trackerMat = new THREE.MeshBasicMaterial({ color: 0x00f3ff, wireframe: true });
+        const trackerGeo = new THREE.SphereGeometry(0.06, 16, 16);
         
         for(let i=0; i<10; i++) {
+            const trackerMat = new THREE.MeshBasicMaterial({ color: 0x00f3ff, wireframe: true });
             const mesh = new THREE.Mesh(trackerGeo, trackerMat);
             mesh.visible = false;
             scene.add(mesh);
             handTrackers.push(mesh);
         }
 
-        // --- Live Spline Line for active drawing preview ---
-        let liveLineMesh = null;
+        // Live Line Render Logic for Active Paths
+        function updateLiveLine(handIdx) {
+            const data = handTrackingData[handIdx];
+            if (data.liveLineMesh) scene.remove(data.liveLineMesh);
+            if (data.strokePoints.length < 2) return;
 
-        function updateLiveLine() {
-            if (liveLineMesh) scene.remove(liveLineMesh);
-            if (drawingStrokePoints.length < 2) return;
-
-            const geometry = new THREE.BufferGeometry().setFromPoints(drawingStrokePoints);
-            const material = new THREE.LineBasicMaterial({ color: colors[colorIndex], linewidth: 5 });
-            liveLineMesh = new THREE.Line(geometry, material);
-            scene.add(liveLineMesh);
+            const geometry = new THREE.BufferGeometry().setFromPoints(data.strokePoints);
+            const material = new THREE.LineBasicMaterial({ color: colors[colorIndex], linewidth: 4 });
+            data.liveLineMesh = new THREE.Line(geometry, material);
+            scene.add(data.liveLineMesh);
         }
 
-        // --- 3. Intelligent 3D Geometry Processing ---
-        function computeAndBuild3DShape() {
-            if (drawingStrokePoints.length < 5) return;
+        // --- 3. Intelligent Shape Generation Engine ---
+        function computeAndBuild3DShape(points) {
+            if (points.length < 5) return;
 
-            // Compute bounding parameters in 3D Space
             let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
-            drawingStrokePoints.forEach(p => {
+            points.forEach(p => {
                 if(p.x < minX) minX = p.x; if(p.x > maxX) maxX = p.x;
                 if(p.y < minY) minY = p.y; if(p.y > maxY) maxY = p.y;
                 if(p.z < minZ) minZ = p.z; if(p.z > maxZ) maxZ = p.z;
@@ -128,72 +125,58 @@
             const d = maxZ - minZ;
             const center = new THREE.Vector3(minX + w/2, minY + h/2, minZ + d/2);
 
-            const start = drawingStrokePoints[0];
-            const end = drawingStrokePoints[drawingStrokePoints.length - 1];
+            const start = points[0];
+            const end = points[points.length - 1];
             const isClosedLoop = start.distanceTo(end) < (w + h) * 0.3;
 
             let geometry, material, mesh;
-            material = new THREE.MeshStandardMaterial({ 
-                color: colors[colorIndex], 
-                roughness: 0.2, 
-                metalness: 0.5 
-            });
-
+            material = new THREE.MeshStandardMaterial({ color: colors[colorIndex], roughness: 0.2, metalness: 0.5 });
             let type = 'freeform';
 
             if (isClosedLoop) {
                 const aspect = w / h;
                 if (aspect > 0.75 && aspect < 1.3) {
-                    // Geometric Match: Sphere
                     const radius = (w + h) / 4;
                     geometry = new THREE.SphereGeometry(radius, 32, 32);
                     mesh = new THREE.Mesh(geometry, material);
                     mesh.position.copy(center);
                     type = 'sphere';
                     mesh.userData = { type, radius };
-                    statusText.innerText = "3D Sphere Generated";
+                    statusText.innerText = "Sphere Created";
                 } else {
-                    // Geometric Match: Box
                     geometry = new THREE.BoxGeometry(w, h, Math.max(0.2, (w+h)/4));
                     mesh = new THREE.Mesh(geometry, material);
                     mesh.position.copy(center);
                     type = 'box';
                     mesh.userData = { type, w, h, d: Math.max(0.2, (w+h)/4) };
-                    statusText.innerText = "3D Cube Generated";
+                    statusText.innerText = "Box Created";
                 }
             } else {
-                // Check if it looks like a straight line structural rod
                 if (w / h > 3.5 || h / w > 3.5) {
                     const length = start.distanceTo(end);
                     geometry = new THREE.CylinderGeometry(0.08, 0.08, length, 16);
                     mesh = new THREE.Mesh(geometry, material);
                     mesh.position.copy(center);
-                    
-                    // Align cylinder to path direction vector
                     const dir = new THREE.Vector3().subVectors(end, start).normalize();
                     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-                    
                     type = 'cylinder';
                     mesh.userData = { type, length, dir: dir.clone() };
-                    statusText.innerText = "3D Structural Cylinder Generated";
+                    statusText.innerText = "Cylinder Beam Created";
                 } else {
-                    // Fallback: Generate custom continuous ribbon array using custom composite paths
                     const group = new THREE.Group();
                     const segmentGeo = new THREE.SphereGeometry(0.07, 8, 8);
-                    
-                    for(let i=0; i<drawingStrokePoints.length; i+=2) {
+                    for(let i=0; i<points.length; i+=2) {
                         let segMesh = new THREE.Mesh(segmentGeo, material.clone());
-                        segMesh.position.copy(drawingStrokePoints[i]);
+                        segMesh.position.copy(points[i]);
                         group.add(segMesh);
                     }
                     mesh = group;
                     type = 'freeform';
                     mesh.userData = { type };
-                    statusText.innerText = "3D Ribbon Network Formed";
+                    statusText.innerText = "Ribbon Network Created";
                 }
             }
 
-            // Assign base physics configurations internally
             mesh.userData.velocity = new THREE.Vector3(0, 0, 0);
             mesh.userData.isStatic = true;
 
@@ -202,203 +185,222 @@
             objectHistory.push([mesh]);
         }
 
-        // --- 4. Core Native 3D Physics Core Loop ---
+        // --- 4. Core 3D Physics Loop ---
         const clock = new THREE.Clock();
         
         function animatePhysicsEngine() {
             requestAnimationFrame(animatePhysicsEngine);
-            
             const dt = Math.min(0.03, clock.getDelta());
             
             for (let i = physicalObjects.length - 1; i >= 0; i--) {
                 const obj = physicalObjects[i];
                 if (obj.userData.isStatic) continue;
 
-                // 1. Process Downward Gravity Vector Acceleration
                 obj.userData.velocity.y -= 9.8 * dt;
                 obj.position.addScaledVector(obj.userData.velocity, dt);
 
-                // 2. Continuous Rotation simulation for tumbling blocks
                 if(obj.userData.rotSpeed) {
                     obj.rotation.x += obj.userData.rotSpeed.x * dt;
                     obj.rotation.y += obj.userData.rotSpeed.y * dt;
                 }
 
-                // 3. Collision boundaries (Floor matrix reset)
-                if (obj.position.y < -2.5) {
-                    obj.position.y = -2.5;
-                    obj.userData.velocity.y *= -0.4; // Bounce dampening
-                    obj.userData.velocity.x *= 0.8;  // Drag friction
-                    obj.userData.velocity.z *= 0.8;
+                // Floor Boundaries
+                if (obj.position.y < -2.4) {
+                    obj.position.y = -2.4;
+                    obj.userData.velocity.y *= -0.35; // Bounce absorption
+                    obj.userData.velocity.x *= 0.85; // Friction resistance
+                    obj.userData.velocity.z *= 0.85;
                 }
 
-                // 4. Interactive collision pushes via proximity with hand tracking nodes
+                // Interactive hand collisions (pushes blocks forward/away)
                 handTrackers.forEach(tracker => {
-                    if(!tracker.visible) return;
+                    if(!tracker.visible || tracker.userData.isEraserMode) return;
                     let dist = obj.position.distanceTo(tracker.position);
                     if(dist < 0.25) {
                         let pushDir = new THREE.Vector3().subVectors(obj.position, tracker.position).normalize();
-                        obj.userData.velocity.addScaledVector(pushDir, 4.0); // Kinetic bounce transfer
+                        obj.userData.velocity.addScaledVector(pushDir, 3.5);
                     }
                 });
             }
-            
             renderer.render(scene, camera3d);
         }
         animatePhysicsEngine();
 
-        // --- 5. Integrated MediaPipe Dual Hand Tracking Architecture ---
+        // --- 5. MediaPipe Dual-Hand Processing Architecture ---
         const videoElement = document.getElementById('camera-feed');
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
         
         hands.setOptions({
-            maxNumHands: 2, // Dual hand tracking initialized
+            maxNumHands: 2,
             modelComplexity: 1,
             minDetectionConfidence: 0.65,
             minTrackingConfidence: 0.65
         });
 
         function checkFingerUp(lm, tip, pip) { return lm[tip].y < lm[pip].y; }
+        function lerp(start, end, amt) { return (1 - amt) * start + amt * end; }
 
         hands.onResults((results) => {
-            // Hide all hand tracking spheres inside viewport by default
-            handTrackers.forEach(t => t.visible = false);
+            // Deactivate all visibility tags at initialization frame boundary
+            handTrackers.forEach(t => { t.visible = false; t.userData.isEraserMode = false; t.material.color.setHex(0x00f3ff); });
 
-            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-                if(isDrawingMode) { isDrawingMode = false; computeAndBuild3DShape(); drawingStrokePoints = []; updateLiveLine(); }
-                return;
-            }
+            // Maintain reference flags across hands
+            let universalState = { pinch: false, undo: false };
 
-            const now = Date.now();
-            let primaryDrawRequested = false;
-            let activeDrawingPoint = null;
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                results.multiHandLandmarks.forEach((lm, handIdx) => {
+                    if (handIdx >= 2) return; // Cap loop structural lookups safely at two hands
 
-            let masterTriggerShatter = false;
-            let masterTriggerErase = false;
-            let masterTriggerUndo = false;
-            let masterTriggerPinch = false;
+                    const iUp = checkFingerUp(lm, 8, 6), mUp = checkFingerUp(lm, 12, 10), rUp = checkFingerUp(lm, 16, 14), pUp = checkFingerUp(lm, 20, 18);
+                    const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
 
-            // Iterate over any tracked hand array frame limits dynamically
-            results.multiHandLandmarks.forEach((lm, handIdx) => {
-                const iUp = checkFingerUp(lm, 8, 6), mUp = checkFingerUp(lm, 12, 10), rUp = checkFingerUp(lm, 16, 14), pUp = checkFingerUp(lm, 20, 18);
-                const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+                    // Compute consistent spatial tracking depth configurations
+                    const spatialZ = lerp(-1, -4, (lm[0].z + 0.1) * 5); 
+                    const spatialX = (lm[8].x - 0.5) * -6.5; 
+                    const spatialY = (0.5 - lm[8].y) * 4.5;
 
-                // Safe algorithmic spatial coordinate conversions mapped straight into Three.js metrics
-                // Z coordinate scales dynamically depending on distance width readings
-                const spatialZ = lerp(-1, -4, (lm[0].z + 0.1) * 5); 
-                const spatialX = (lm[8].x - 0.5) * -6.5; 
-                const spatialY = (0.5 - lm[8].y) * 4.5;
+                    const isDraw = iUp && !mUp && !rUp && !pUp;
+                    const isShatter = iUp && mUp && rUp && pUp;
+                    const isEraser = !iUp && !mUp && !rUp && !pUp; // Fist gesture ✊
+                    
+                    if (pUp && !iUp && !mUp && !rUp) universalState.undo = true;
+                    if (pinchDist < 0.045 && !mUp) universalState.pinch = true;
 
-                // Render matching geometric points for the tracking array indices
-                const fingerIndices = [4, 8, 12, 16, 20];
-                fingerIndices.forEach((fId, fIdx) => {
-                    let trackerIndex = (handIdx * 5) + fIdx;
-                    if(trackerIndex < handTrackers.length) {
-                        handTrackers[trackerIndex].position.set((lm[fId].x - 0.5) * -6.5, (0.5 - lm[fId].y) * 4.5, spatialZ);
-                        handTrackers[trackerIndex].visible = true;
-                    }
-                });
+                    // Update standard finger tracking markers
+                    const fingerIndices = [4, 8, 12, 16, 20];
+                    fingerIndices.forEach((fId, fIdx) => {
+                        let trackerIndex = (handIdx * 5) + fIdx;
+                        if(trackerIndex < handTrackers.length) {
+                            let node = handTrackers[trackerIndex];
+                            node.position.set((lm[fId].x - 0.5) * -6.5, (0.5 - lm[fId].y) * 4.5, spatialZ);
+                            node.visible = true;
+                            
+                            // If this specific hand is a fist, mark its nodes as active erasers
+                            if (isEraser) {
+                                node.userData.isEraserMode = true;
+                                node.material.color.setHex(0xff0055); // Crimson warning outline for eraser mode
+                            }
+                        }
+                    });
 
-                // Gestures evaluations
-                if (iUp && !mUp && !rUp && !pUp) { primaryDrawRequested = true; activeDrawingPoint = new THREE.Vector3(spatialX, spatialY, spatialZ); }
-                if (iUp && mUp && rUp && pUp) masterTriggerShatter = true;
-                if (iUp && pUp && !mUp && !rUp) masterTriggerErase = true;
-                if (pUp && !iUp && !mUp && !rUp) masterTriggerUndo = true;
-                if (pinchDist < 0.045 && !mUp) masterTriggerPinch = true;
-            });
-
-            // --- 6. Execution Control System ---
-            if (primaryDrawRequested) {
-                if (!isDrawingMode) { isDrawingMode = true; drawingStrokePoints = []; }
-                drawingStrokePoints.push(activeDrawingPoint);
-                statusText.innerText = "Mapping Spatial Vectors...";
-                updateLiveLine();
-            } else {
-                if (isDrawingMode) { isDrawingMode = false; computeAndBuild3DShape(); drawingStrokePoints = []; updateLiveLine(); }
-
-                if (masterTriggerPinch && now - lastActionTime > 400) {
-                    colorIndex = (colorIndex + 1) % colors.length;
-                    colorBox.style.color = "#" + colors[colorIndex].toString(16);
-                    colorBox.style.backgroundColor = "#" + colors[colorIndex].toString(16);
-                    lastActionTime = now;
-                }
-                else if (masterTriggerUndo && now - lastActionTime > 800) {
-                    if (objectHistory.length > 0) {
-                        const elements = objectHistory.pop();
-                        elements.forEach(el => {
-                            scene.remove(el);
-                            physicalObjects = physicalObjects.filter(item => item !== el);
-                        });
-                        statusText.innerText = "Buffer Rolled Back";
-                    }
-                    lastActionTime = now;
-                }
-                else if (masterTriggerErase) {
-                    physicalObjects.forEach(obj => scene.remove(obj));
-                    physicalObjects = [];
-                    objectHistory = [];
-                    statusText.innerText = "Spatial Core Cleared";
-                }
-                else if (masterTriggerShatter) {
-                    statusText.innerText = "Voxel Disruption Initialized";
-                    let itemsToShatter = physicalObjects.filter(obj => obj.userData.isStatic);
-
-                    itemsToShatter.forEach(parentObj => {
-                        scene.remove(parentObj);
-                        physicalObjects = physicalObjects.filter(item => item !== parentObj);
-
-                        if(parentObj.userData.type === 'freeform') {
-                            // Freeform items don't require block mapping, they just break from static holding values
-                            parentObj.children.forEach(child => {
-                                let worldPos = new THREE.Vector3();
-                                child.getWorldPosition(worldPos);
-                                scene.attach(child);
-                                child.userData = { isStatic: false, velocity: new THREE.Vector3((Math.random()-0.5)*2, Math.random()*2, (Math.random()-0.5)*2) };
-                                physicalObjects.push(child);
-                            });
-                            return;
+                    // --- Action Processing per Independent Hand ---
+                    if (isDraw) {
+                        let data = handTrackingData[handIdx];
+                        if (!data.isDrawing) { data.isDrawing = true; data.strokePoints = []; }
+                        data.strokePoints.push(new THREE.Vector3(spatialX, spatialY, spatialZ));
+                        statusText.innerText = `Hand [${handIdx + 1}] Structuring...`;
+                        updateLiveLine(handIdx);
+                    } else {
+                        let data = handTrackingData[handIdx];
+                        if (data.isDrawing) {
+                            data.isDrawing = false;
+                            computeAndBuild3DShape(data.strokePoints);
+                            data.strokePoints = [];
+                            updateLiveLine(handIdx);
                         }
 
-                        // Generate beautiful 3D particle grid maps inside bounding boxes/spheres
-                        const blockScale = 0.15;
-                        const col = parentObj.material.color;
-                        const clusterPos = parentObj.position;
-                        const voxMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.4 });
-                        const voxGeo = new THREE.BoxGeometry(blockScale, blockScale, blockScale);
-                        
-                        let generatedShatterMotes = [];
-                        let distributionLimit = 4; // Spawns an even layout grid bound distribution mix
+                        if (isEraser) {
+                            statusText.innerText = `Hand [${handIdx + 1}] Eraser Active`;
+                            const palmX = (lm[9].x - 0.5) * -6.5;
+                            const palmY = (0.5 - lm[9].y) * 4.5;
+                            const palmZ = spatialZ;
+                            const eraseRadius = 0.45; // Physical cleanup bounding reach
 
-                        for (let x = -distributionLimit/2; x <= distributionLimit/2; x++) {
-                            for (let y = -distributionLimit/2; y <= distributionLimit/2; y++) {
-                                for (let z = -distributionLimit/2; z <= distributionLimit/2; z++) {
-                                    let instanceMesh = new THREE.Mesh(voxGeo, voxMat);
-                                    instanceMesh.position.set(
-                                        clusterPos.x + (x * blockScale * 1.1),
-                                        clusterPos.y + (y * blockScale * 1.1),
-                                        clusterPos.z + (z * blockScale * 1.1)
-                                    );
-                                    
-                                    // Assign randomized multi-directional force values
-                                    instanceMesh.userData = {
-                                        isStatic: false,
-                                        velocity: new THREE.Vector3((Math.random() - 0.5) * 3, Math.random() * 3 + 1, (Math.random() - 0.5) * 3),
-                                        rotSpeed: new THREE.Vector3(Math.random() * 5, Math.random() * 5, 0)
-                                    };
+                            // Direct structural cleanup checking
+                            for (let k = physicalObjects.length - 1; k >= 0; k--) {
+                                let obj = physicalObjects[k];
+                                let pos = new THREE.Vector3();
+                                if (obj.getWorldPosition) obj.getWorldPosition(pos);
+                                else pos.copy(obj.position);
 
-                                    scene.add(instanceMesh);
-                                    physicalObjects.push(instanceMesh);
-                                    generatedShatterMotes.push(instanceMesh);
+                                if (pos.distanceTo(new THREE.Vector3(palmX, palmY, palmZ)) < eraseRadius) {
+                                    scene.remove(obj);
+                                    physicalObjects.splice(k, 1);
                                 }
                             }
                         }
-                        objectHistory.push(generatedShatterMotes);
+                        else if (isShatter) {
+                            statusText.innerText = "Shatter Field Discharged";
+                            let targets = physicalObjects.filter(obj => obj.userData.isStatic);
+
+                            targets.forEach(parentObj => {
+                                scene.remove(parentObj);
+                                physicalObjects = physicalObjects.filter(item => item !== parentObj);
+
+                                if(parentObj.userData.type === 'freeform') {
+                                    parentObj.children.forEach(child => {
+                                        let worldPos = new THREE.Vector3();
+                                        child.getWorldPosition(worldPos);
+                                        scene.attach(child);
+                                        child.userData = { isStatic: false, velocity: new THREE.Vector3((Math.random()-0.5)*2, Math.random()*2 + 1, (Math.random()-0.5)*2) };
+                                        physicalObjects.push(child);
+                                    });
+                                    return;
+                                }
+
+                                const blockScale = 0.14;
+                                const col = parentObj.material.color;
+                                const clusterPos = parentObj.position;
+                                const voxMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.4 });
+                                const voxGeo = new THREE.BoxGeometry(blockScale, blockScale, blockScale);
+                                
+                                let generatedBlocks = [];
+                                let boundLimit = 4;
+
+                                for (let x = -boundLimit/2; x <= boundLimit/2; x++) {
+                                    for (let y = -boundLimit/2; y <= boundLimit/2; y++) {
+                                        for (let z = -boundLimit/2; z <= boundLimit/2; z++) {
+                                            let instanceMesh = new THREE.Mesh(voxGeo, voxMat);
+                                            instanceMesh.position.set(
+                                                clusterPos.x + (x * blockScale * 1.1),
+                                                clusterPos.y + (y * blockScale * 1.1),
+                                                clusterPos.z + (z * blockScale * 1.1)
+                                            );
+                                            
+                                            instanceMesh.userData = {
+                                                isStatic: false,
+                                                velocity: new THREE.Vector3((Math.random() - 0.5) * 3, Math.random() * 3 + 1, (Math.random() - 0.5) * 3),
+                                                rotSpeed: new THREE.Vector3(Math.random() * 5, Math.random() * 5, 0)
+                                            };
+
+                                            scene.add(instanceMesh);
+                                            physicalObjects.push(instanceMesh);
+                                            generatedBlocks.push(instanceMesh);
+                                        }
+                                    }
+                                }
+                                objectHistory.push(generatedBlocks);
+                            });
+                        }
+                    }
+                });
+            } else {
+                // Clear active line drawing points if both hands leave viewport tracking boundaries
+                handTrackingData.forEach((data, index) => {
+                    if(data.isDrawing) { data.isDrawing = false; computeAndBuild3DShape(data.strokePoints); data.strokePoints = []; updateLiveLine(index); }
+                });
+            }
+
+            // --- 6. Global Configuration Modifiers ---
+            const now = Date.now();
+            if (universalState.pinch && now - lastActionTime > 400) {
+                colorIndex = (colorIndex + 1) % colors.length;
+                let hexString = "#" + colors[colorIndex].toString(16).padStart(6, '0');
+                colorBox.style.backgroundColor = hexString;
+                lastActionTime = now;
+            }
+            if (universalState.undo && now - lastActionTime > 800) {
+                if (objectHistory.length > 0) {
+                    const group = objectHistory.pop();
+                    group.forEach(el => {
+                        scene.remove(el);
+                        physicalObjects = physicalObjects.filter(item => item !== el);
                     });
+                    statusText.innerText = "Object Array Recalled";
                 }
+                lastActionTime = now;
             }
         });
-
-        function lerp(start, end, amt) { return (1 - amt) * start + amt * end; }
 
         window.addEventListener('resize', () => {
             camera3d.aspect = window.innerWidth / window.innerHeight;
@@ -406,11 +408,11 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        // --- 7. Initialize Camera Input Array ---
+        // --- 7. Initialize Camera Array ---
         new Camera(videoElement, {
             onFrame: async () => { await hands.send({image: videoElement}); },
             width: 1280, height: 720
-        }).start().then(() => statusText.innerText = "Spatial Matrix Online");
+        }).start().then(() => statusText.innerText = "Dual Matrix Nodes Online");
     </script>
 </body>
 </html>
